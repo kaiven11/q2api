@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q2API 批量导入账户</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group textarea {
+            width: 100%;
+            min-height: 200px;
+            padding: 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            resize: vertical;
+            transition: border-color 0.3s;
+        }
+
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #4facfe;
+        }
+
+        .format-info {
+            background: #f8f9fa;
+            border-left: 4px solid #4facfe;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .format-info h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .format-info code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(79, 172, 254, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+            transform: translateY(-2px);
+        }
+
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .result.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .result.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4facfe;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Q2API 批量导入账户</h1>
+            <p>快速导入 Amazon Q Developer 账户到系统中</p>
+        </div>
+
+        <div class="content">
+            <div class="format-info">
+                <h3>📋 数据格式说明</h3>
+                <p>每行一个账户，格式如下：</p>
+                <code>email|password|clientId|clientSecret|refreshToken|accessToken</code>
+                <br><br>
+                <p><strong>示例：</strong></p>
+                <code>user@gmail.com|password123|clientId123|secret456|refreshToken789|accessToken000</code>
+            </div>
+
+            <form id="importForm">
+                <div class="form-group">
+                    <label for="accountData">账户数据：</label>
+                    <textarea
+                        id="accountData"
+                        name="accountData"
+                        placeholder="请粘贴账户数据，每行一个账户..."
+                        required
+                    ></textarea>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="dryRun" name="dryRun">
+                    <label for="dryRun">预览模式（只检查格式，不实际导入）</label>
+                </div>
+
+                <div class="buttons">
+                    <button type="submit" class="btn btn-primary">
+                        🚀 开始导入
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="clearForm()">
+                        🗑️ 清空
+                    </button>
+                </div>
+            </form>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>正在处理中，请稍候...</p>
+            </div>
+
+            <div class="result" id="result"></div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('importForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const accountData = document.getElementById('accountData').value.trim();
+            const dryRun = document.getElementById('dryRun').checked;
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+
+            if (!accountData) {
+                showResult('请输入账户数据', 'error');
+                return;
+            }
+
+            // 显示加载状态
+            loading.style.display = 'block';
+            result.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/batch-import', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        accountData: accountData,
+                        dryRun: dryRun
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showResult(data.message, 'success');
+                    if (!dryRun && data.success) {
+                        // 成功导入后清空表单
+                        document.getElementById('accountData').value = '';
+                    }
+                } else {
+                    showResult(data.error || '导入失败', 'error');
+                }
+            } catch (error) {
+                showResult('网络错误: ' + error.message, 'error');
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        function showResult(message, type) {
+            const result = document.getElementById('result');
+            result.className = 'result ' + type;
+            result.innerHTML = message.replace(/\n/g, '<br>');
+            result.style.display = 'block';
+        }
+
+        function clearForm() {
+            document.getElementById('accountData').value = '';
+            document.getElementById('dryRun').checked = false;
+            document.getElementById('result').style.display = 'none';
+        }
+
+        // 自动调整文本框高度
+        document.getElementById('accountData').addEventListener('input', function() {
+            const lines = this.value.split('\n').length;
+            const minHeight = 200;
+            const lineHeight = 20;
+            const newHeight = Math.max(minHeight, lines * lineHeight + 30);
+            this.style.height = newHeight + 'px';
+        });
+    </script>
+</body>
+</html>

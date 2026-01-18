@@ -65,70 +65,70 @@ class SQLiteBackend(DatabaseBackend):
     def __init__(self, db_path: Path):
         self._db_path = db_path
         self._initialized = False
+        self._conn: Optional[aiosqlite.Connection] = None
 
     async def initialize(self) -> None:
+        if self._initialized:
+            return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(self._db_path) as conn:
-            await conn.execute("PRAGMA journal_mode=WAL;")
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS accounts (
-                    id TEXT PRIMARY KEY,
-                    label TEXT,
-                    clientId TEXT,
-                    clientSecret TEXT,
-                    refreshToken TEXT,
-                    accessToken TEXT,
-                    other TEXT,
-                    last_refresh_time TEXT,
-                    last_refresh_status TEXT,
-                    created_at TEXT,
-                    updated_at TEXT,
-                    enabled INTEGER DEFAULT 1,
-                    error_count INTEGER DEFAULT 0,
-                    success_count INTEGER DEFAULT 0
-                )
-            """)
-            # Add columns if missing (migrations)
-            try:
-                async with conn.execute("PRAGMA table_info(accounts)") as cursor:
-                    rows = await cursor.fetchall()
-                    cols = [row[1] for row in rows]
-                    if "enabled" not in cols:
-                        await conn.execute("ALTER TABLE accounts ADD COLUMN enabled INTEGER DEFAULT 1")
-                    if "error_count" not in cols:
-                        await conn.execute("ALTER TABLE accounts ADD COLUMN error_count INTEGER DEFAULT 0")
-                    if "success_count" not in cols:
-                        await conn.execute("ALTER TABLE accounts ADD COLUMN success_count INTEGER DEFAULT 0")
-            except Exception:
-                pass
-            await conn.commit()
+        self._conn = await aiosqlite.connect(self._db_path, timeout=30.0)
+        
+        # Performance tuning PRAGMAs
+        await self._conn.execute("PRAGMA journal_mode=WAL;")
+        await self._conn.execute("PRAGMA synchronous = NORMAL;")
+        await self._conn.execute("PRAGMA cache_size = -65536; -- 64MB")
+        await self._conn.execute("PRAGMA temp_store = MEMORY;")
+        await self._conn.execute("PRAGMA busy_timeout = 30000;")
+        
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                label TEXT,
+                clientId TEXT,
+                clientSecret TEXT,
+                refreshToken TEXT,
+                accessToken TEXT,
+                other TEXT,
+                last_refresh_time TEXT,
+                last_refresh_status TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                enabled INTEGER DEFAULT 1,
+                error_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0
+            )
+        """)
+        
+        # Create indexes for performance
+        await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_accounts_enabled ON accounts (enabled);")
+        await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_accounts_created_at ON accounts (created_at);")
+        await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_accounts_success_count ON accounts (success_count);")
+
+        await self._conn.commit()
         self._initialized = True
 
     async def close(self) -> None:
-        pass  # SQLite connections are created per-operation
-
-    def _conn(self) -> aiosqlite.Connection:
-        return aiosqlite.connect(self._db_path)
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+        self._initialized = False
 
     async def execute(self, query: str, params: tuple = ()) -> int:
-        async with self._conn() as conn:
-            cursor = await conn.execute(query, params)
-            await conn.commit()
-            return cursor.rowcount
+        cursor = await self._conn.execute(query, params)
+        await self._conn.commit()
+        return cursor.rowcount
 
     async def fetchone(self, query: str, params: tuple = ()) -> Optional[Dict[str, Any]]:
-        async with self._conn() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(query, params) as cursor:
-                row = await cursor.fetchone()
-                return dict(row) if row else None
+        self._conn.row_factory = aiosqlite.Row
+        async with self._conn.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
     async def fetchall(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
-        async with self._conn() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(query, params) as cursor:
-                rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
+        self._conn.row_factory = aiosqlite.Row
+        async with self._conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
 
 class PostgresBackend(DatabaseBackend):
@@ -329,7 +329,8 @@ def get_database_backend() -> DatabaseBackend:
     else:
         # Default to SQLite
         base_dir = Path(__file__).resolve().parent
-        db_path = base_dir / "data.sqlite3"
+        db_name = os.getenv('SQLITE_DB_NAME', 'data.sqlite3')
+        db_path = base_dir / db_name
         _db = SQLiteBackend(db_path)
         print(f"[DB] Using SQLite backend: {db_path}")
 

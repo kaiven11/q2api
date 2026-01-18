@@ -242,7 +242,19 @@ async def send_chat_request(
 
     payload_str = json.dumps(body_json, ensure_ascii=False)
     headers = _merge_headers(headers_from_log, access_token)
-    
+
+    # 记录请求大小
+    payload_size_bytes = len(payload_str.encode('utf-8'))
+    payload_size_kb = payload_size_bytes / 1024
+    payload_size_mb = payload_size_kb / 1024
+
+    if payload_size_mb >= 1:
+        print(f"[Request Size] {payload_size_mb:.2f} MB ({payload_size_bytes:,} bytes)")
+    elif payload_size_kb >= 1:
+        print(f"[Request Size] {payload_size_kb:.2f} KB ({payload_size_bytes:,} bytes)")
+    else:
+        print(f"[Request Size] {payload_size_bytes} bytes")
+
     local_client = False
     if client is None:
         local_client = True

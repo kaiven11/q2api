@@ -131,12 +131,17 @@ def _sse_format(event_type: str, data: Dict[str, Any]) -> str:
     json_data = json.dumps(data, ensure_ascii=False)
     return f"event: {event_type}\ndata: {json_data}\n\n"
 
-def build_message_start(conversation_id: str, model: str = "claude-sonnet-4.5", input_tokens: int = 0) -> str:
+def build_message_start(
+    message_id: str,
+    model: str = "claude-sonnet-4.5",
+    input_tokens: int = 0,
+    conversation_id: Optional[str] = None
+) -> str:
     """Build message_start SSE event."""
     data = {
         "type": "message_start",
         "message": {
-            "id": conversation_id,
+            "id": message_id,
             "type": "message",
             "role": "assistant",
             "content": [],
@@ -146,14 +151,27 @@ def build_message_start(conversation_id: str, model: str = "claude-sonnet-4.5", 
             "usage": {"input_tokens": input_tokens, "output_tokens": 0}
         }
     }
+    if conversation_id:
+        data["message"]["conversation_id"] = conversation_id
     return _sse_format("message_start", data)
 
-def build_content_block_start(index: int, block_type: str = "text") -> str:
+def build_content_block_start(
+    index: int,
+    block_type: str = "text",
+    extra_block_data: Optional[Dict[str, Any]] = None
+) -> str:
     """Build content_block_start SSE event."""
+    block = {"type": block_type}
+    if block_type == "text":
+        block["text"] = ""
+    elif block_type == "thinking":
+        block["thinking"] = ""
+    if extra_block_data:
+        block.update(extra_block_data)
     data = {
         "type": "content_block_start",
         "index": index,
-        "content_block": {"type": block_type, "text": ""} if block_type == "text" else {"type": block_type}
+        "content_block": block
     }
     return _sse_format("content_block_start", data)
 
@@ -197,17 +215,15 @@ def build_message_stop(input_tokens: int, output_tokens: int, stop_reason: Optio
 
 def build_tool_use_start(index: int, tool_use_id: str, tool_name: str) -> str:
     """Build tool_use content_block_start SSE event."""
-    data = {
-        "type": "content_block_start",
-        "index": index,
-        "content_block": {
-            "type": "tool_use",
+    return build_content_block_start(
+        index,
+        "tool_use",
+        extra_block_data={
             "id": tool_use_id,
             "name": tool_name,
             "input": {}
         }
-    }
-    return _sse_format("content_block_start", data)
+    )
 
 def build_tool_use_input_delta(index: int, input_json_delta: str) -> str:
     """Build tool_use input_json_delta SSE event."""
@@ -217,6 +233,18 @@ def build_tool_use_input_delta(index: int, input_json_delta: str) -> str:
         "delta": {
             "type": "input_json_delta",
             "partial_json": input_json_delta
+        }
+    }
+    return _sse_format("content_block_delta", data)
+
+def build_thinking_delta(index: int, thinking: str) -> str:
+    """Build thinking_delta SSE event."""
+    data = {
+        "type": "content_block_delta",
+        "index": index,
+        "delta": {
+            "type": "thinking_delta",
+            "thinking": thinking
         }
     }
     return _sse_format("content_block_delta", data)

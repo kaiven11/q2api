@@ -4,9 +4,10 @@ import time
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
+from context_manager import ContextManager, TokenBasedContextManager
 
 try:
-    from .claude_types import ClaudeRequest, ClaudeMessage, ClaudeTool
+    from .claude_types import ClaudeRequest, ClaudeMessage, ClaudeTool, ClaudeThinking
 except ImportError:
     # Fallback for dynamic loading where relative import might fail
     # We assume claude_types is available in sys.modules or we can import it directly if in same dir
@@ -16,13 +17,41 @@ except ImportError:
     else:
         # Try absolute import assuming v2 is in path or current dir
         try:
-            from claude_types import ClaudeRequest, ClaudeMessage, ClaudeTool
+            from claude_types import ClaudeRequest, ClaudeMessage, ClaudeTool, ClaudeThinking
         except ImportError:
-             # Last resort: if loaded via importlib in app.py, we might need to rely on app.py injecting it
-             # But app.py loads this module.
-             pass
+            # Last resort: if loaded via importlib in app.py, we might need to rely on app.py injecting it
+            # But app.py loads this module.
+            pass
 
 logger = logging.getLogger(__name__)
+
+MAX_THINKING_BUDGET = 24576
+DEFAULT_THINKING_BUDGET = 20000
+
+def clamp_thinking_budget(value: Optional[int]) -> int:
+    """Clamp thinking budget into safe range."""
+    if value is None:
+        return DEFAULT_THINKING_BUDGET
+    return max(256, min(MAX_THINKING_BUDGET, int(value)))
+
+def generate_thinking_prefix(thinking: Optional["ClaudeThinking"]) -> Optional[str]:
+    """Return thinking instruction tags when thinking is enabled."""
+    if not thinking:
+        return None
+    if getattr(thinking, "thinking_type", "").lower() != "enabled":
+        return None
+    budget = clamp_thinking_budget(getattr(thinking, "budget_tokens", None))
+    return (
+        "<thinking_mode>enabled</thinking_mode>"
+        f"<max_thinking_length>{budget}</max_thinking_length>"
+    )
+
+def has_thinking_tags(text: str) -> bool:
+    """Check whether system prompt already contains thinking tags."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return "<thinking_mode>" in lowered or "<max_thinking_length>" in lowered
 
 def get_current_timestamp() -> str:
     """Get current timestamp in Amazon Q format."""
@@ -130,8 +159,22 @@ def merge_user_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     
     return result
 
-def process_history(messages: List[ClaudeMessage]) -> List[Dict[str, Any]]:
-    """Process history messages to match Amazon Q format (alternating user/assistant)."""
+def process_history(messages: List[ClaudeMessage], max_messages: int = 20) -> List[Dict[str, Any]]:
+    """Process history messages to match Amazon Q format (alternating user/assistant).
+
+    Args:
+        messages: List of Claude messages
+        max_messages: Maximum number of messages to keep (default 20, 0 = unlimited)
+    """
+    # 智能压缩：已禁用
+    if max_messages == 0:
+        # 无限制模式，不压缩
+        pass
+    elif len(messages) > max_messages:
+        # 有限制模式，简单截断
+        print(f"[Context Truncate] {len(messages)} msgs → {max_messages} msgs")
+        messages = messages[-max_messages:]
+
     history = []
     seen_tool_use_ids = set()
     
@@ -254,8 +297,14 @@ def process_history(messages: List[ClaudeMessage]) -> List[Dict[str, Any]]:
         
     return history
 
-def convert_claude_to_amazonq_request(req: ClaudeRequest, conversation_id: Optional[str] = None) -> Dict[str, Any]:
-    """Convert ClaudeRequest to Amazon Q request body."""
+def convert_claude_to_amazonq_request(req: ClaudeRequest, conversation_id: Optional[str] = None, max_history: int = 20) -> Dict[str, Any]:
+    """Convert ClaudeRequest to Amazon Q request body.
+
+    Args:
+        req: Claude request
+        conversation_id: Optional conversation ID
+        max_history: Maximum number of history messages to keep (0 = unlimited)
+    """
     if conversation_id is None:
         conversation_id = str(uuid.uuid4())
         
@@ -360,24 +409,33 @@ def convert_claude_to_amazonq_request(req: ClaudeRequest, conversation_id: Optio
             f"{formatted_content}"
         )
         
-    if req.system and formatted_content:
-        sys_text = ""
+    thinking_prefix = generate_thinking_prefix(req.thinking)
+
+    system_text = ""
+    if req.system:
         if isinstance(req.system, str):
-            sys_text = req.system
+            system_text = req.system
         elif isinstance(req.system, list):
             parts = []
             for b in req.system:
                 if isinstance(b, dict) and b.get("type") == "text":
                     parts.append(b.get("text", ""))
-            sys_text = "\n".join(parts)
-            
-        if sys_text:
-            formatted_content = (
-                "--- SYSTEM PROMPT BEGIN ---\n"
-                f"{sys_text}\n"
-                "--- SYSTEM PROMPT END ---\n\n"
-                f"{formatted_content}"
-            )
+            system_text = "\n".join(parts)
+
+    if thinking_prefix:
+        if system_text:
+            if not has_thinking_tags(system_text):
+                system_text = f"{thinking_prefix}\n{system_text}"
+        else:
+            system_text = thinking_prefix
+
+    if system_text and formatted_content:
+        formatted_content = (
+            "--- SYSTEM PROMPT BEGIN ---\n"
+            f"{system_text}\n"
+            "--- SYSTEM PROMPT END ---\n\n"
+            f"{formatted_content}"
+        )
             
     # 5. Model
     model_id = map_model_name(req.model)
@@ -394,7 +452,7 @@ def convert_claude_to_amazonq_request(req: ClaudeRequest, conversation_id: Optio
         
     # 7. History
     history_msgs = req.messages[:-1] if len(req.messages) > 1 else []
-    aq_history = process_history(history_msgs)
+    aq_history = process_history(history_msgs, max_messages=max_history)
     
     # 8. Final Body
     return {

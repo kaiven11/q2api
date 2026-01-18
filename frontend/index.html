@@ -190,7 +190,7 @@
 </head>
 <body>
   <div class="container">
-    <h1>v2 前端控制台</h1>
+    <h1>Q2api 前端控制台</h1>
 
     <div class="tabs">
       <button class="tab active" onclick="switchTab('accounts')">账号管理</button>
@@ -201,9 +201,28 @@
 
     <div id="tab-accounts" class="tab-content active">
       <div class="panel">
-        <h2>账号管理</h2>
+        <h2>账号管理 <span id="accountCount" style="font-size: 0.8em; color: #666;"></span></h2>
         <div class="row">
           <button class="btn-secondary" onclick="loadAccounts()">刷新列表</button>
+          <div style="margin-left: 20px;">
+            <label><input type="radio" name="accountFilter" value="all" checked onchange="loadAccounts()"> 全部</label>
+            <label style="margin-left: 10px;"><input type="radio" name="accountFilter" value="enabled" onchange="loadAccounts()"> 已启用</label>
+            <label style="margin-left: 10px;"><input type="radio" name="accountFilter" value="disabled" onchange="loadAccounts()"> 已禁用</label>
+          </div>
+          <div style="margin-left: 20px;">
+            <label>排序：
+              <select id="sortBy" onchange="loadAccounts()">
+                <option value="created_at">创建日期</option>
+                <option value="success_count">成功次数</option>
+              </select>
+            </label>
+            <label style="margin-left: 10px;">
+              <select id="sortOrder" onchange="loadAccounts()">
+                <option value="desc">降序</option>
+                <option value="asc">升序</option>
+              </select>
+            </label>
+          </div>
         </div>
         <div class="list" id="accounts"></div>
       </div>
@@ -313,6 +332,33 @@ function api(path){
   const pathClean = ('/' + (path || '').replace(/^\/+/, '')).replace(/\/{2,}/g, '/');
   return pathClean;
 }
+
+// Authentication helpers
+function getAuthPassword() {
+  return localStorage.getItem('adminPassword');
+}
+
+function getAuthHeaders() {
+  const password = getAuthPassword();
+  if (!password) return {};
+  return { 'Authorization': `Bearer ${password}` };
+}
+
+// Authenticated fetch wrapper
+async function authFetch(url, options = {}) {
+  const headers = { ...getAuthHeaders(), ...options.headers };
+  const response = await fetch(url, { ...options, headers });
+
+  if (response.status === 401) {
+    localStorage.removeItem('adminPassword');
+    window.location.href = '/login';
+    throw new Error('Unauthorized');
+  }
+
+  return response;
+}
+
+// Check authentication on page load - removed, combined with loadAccounts below
 
 // Virtual scroll state
 let accountsData = [];
@@ -557,8 +603,12 @@ class VirtualScroll {
     this.measuredHeights.clear();
     this.heightAdjusted = false;
     this.content.innerHTML = '';
-    this.render();
-    requestAnimationFrame(() => this.measureAndAdjust());
+    this.visibleStart = -1; // Force re-render
+    this.visibleEnd = -1;
+    requestAnimationFrame(() => {
+      this.render();
+      this.measureAndAdjust();
+    });
   }
   
   destroy() {
@@ -597,9 +647,20 @@ function renderAccounts(list){
 
 async function loadAccounts(){
   try{
-    const r = await fetch(api('/v2/accounts'));
+    const filter = document.querySelector('input[name="accountFilter"]:checked')?.value || 'all';
+    const sortBy = document.getElementById('sortBy')?.value || 'created_at';
+    const sortOrder = document.getElementById('sortOrder')?.value || 'desc';
+    let url = '/v2/accounts?';
+    const params = [];
+    if (filter === 'enabled') params.push('enabled=true');
+    else if (filter === 'disabled') params.push('enabled=false');
+    params.push(`sort_by=${sortBy}`);
+    params.push(`sort_order=${sortOrder}`);
+    url += params.join('&');
+    const r = await authFetch(api(url));
     const j = await r.json();
-    renderAccounts(j);
+    document.getElementById('accountCount').textContent = `(${j.count})`;
+    renderAccounts(j.accounts);
   } catch(e){
     alert('加载账户失败：' + e);
   }
@@ -620,7 +681,7 @@ async function createAccount(){
     })()
   };
   try{
-    const r = await fetch(api('/v2/accounts'), {
+    const r = await authFetch(api('/v2/accounts'), {
       method:'POST',
       headers:{ 'content-type':'application/json' },
       body: JSON.stringify(body)
@@ -638,7 +699,7 @@ async function createAccount(){
 async function deleteAccount(id){
   if (!confirm('确认删除该账号？')) return;
   try{
-    const r = await fetch(api('/v2/accounts/' + encodeURIComponent(id)), { method:'DELETE' });
+    const r = await authFetch(api('/v2/accounts/' + encodeURIComponent(id)), { method:'DELETE' });
     if (!r.ok) { throw new Error(await r.text()); }
     await loadAccounts();
   } catch(e){
@@ -648,7 +709,7 @@ async function deleteAccount(id){
 
 async function updateAccount(id, patch){
   try{
-    const r = await fetch(api('/v2/accounts/' + encodeURIComponent(id)), {
+    const r = await authFetch(api('/v2/accounts/' + encodeURIComponent(id)), {
       method:'PATCH',
       headers:{ 'content-type':'application/json' },
       body: JSON.stringify(patch)
@@ -662,7 +723,7 @@ async function updateAccount(id, patch){
 
 async function refreshAccount(id){
   try{
-    const r = await fetch(api('/v2/accounts/' + encodeURIComponent(id) + '/refresh'), { method:'POST' });
+    const r = await authFetch(api('/v2/accounts/' + encodeURIComponent(id) + '/refresh'), { method:'POST' });
     if (!r.ok) { throw new Error(await r.text()); }
     await loadAccounts();
   } catch(e){
@@ -678,7 +739,7 @@ async function refreshAccount(id){
      enabled: document.getElementById('auth_enabled').checked
    };
    try {
-     const r = await fetch(api('/v2/auth/start'), {
+     const r = await authFetch(api('/v2/auth/start'), {
        method: 'POST',
        headers: { 'content-type': 'application/json' },
        body: JSON.stringify(body)
@@ -708,7 +769,7 @@ async function refreshAccount(id){
    }
    document.getElementById('auth_info').textContent += '\\n\\n正在等待授权并创建账号（最多5分钟）...';
    try{
-     const r = await fetch(api('/v2/auth/claim/' + encodeURIComponent(currentAuth.authId)), { method: 'POST' });
+     const r = await authFetch(api('/v2/auth/claim/' + encodeURIComponent(currentAuth.authId)), { method: 'POST' });
      const text = await r.text();
      let j;
      try { j = JSON.parse(text); } catch { j = { raw: text }; }
@@ -733,7 +794,7 @@ async function send() {
   const headers = { 'content-type': 'application/json' };
 
   if (!stream) {
-    const r = await fetch(api('/v1/chat/completions'), {
+    const r = await authFetch(api('/v1/chat/completions'), {
       method:'POST',
       headers,
       body: JSON.stringify(body)
@@ -742,7 +803,7 @@ async function send() {
     try { out.textContent = JSON.stringify(JSON.parse(text), null, 2); }
     catch { out.textContent = text; }
   } else {
-    const r = await fetch(api('/v1/chat/completions'), {
+    const r = await authFetch(api('/v1/chat/completions'), {
       method:'POST',
       headers,
       body: JSON.stringify(body)
@@ -758,6 +819,13 @@ async function send() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  // Check authentication first
+  const password = getAuthPassword();
+  if (!password) {
+    window.location.href = '/login';
+    return;
+  }
+  // Only load accounts if authenticated
   loadAccounts();
 });
 </script>
